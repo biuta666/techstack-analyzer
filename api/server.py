@@ -1,4 +1,4 @@
-"""TechStack Analyzer API - FastAPI server."""
+"""TechStack Analyzer v2.0 - powered by Wappalyzer (7,245 fingerprints)."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -7,21 +7,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 import uvicorn
 
+from scanner.wappalyzer_scanner import scan as wappalyzer_scan, get_fingerprint_stats
 from scanner.html_scanner import scan as html_scan
-from scanner.header_scanner import scan as header_scan
 from scanner.dns_scanner import scan as dns_scan
-from detector.fingerprint_engine import detect
 from report.generator import generate_report
+from detector.fingerprint_engine import load_fingerprints
 
-app = FastAPI(title="TechStack Analyzer", version="1.0.0", docs_url="/docs")
+app = FastAPI(title="TechStack Analyzer", version="2.0.0", docs_url="/docs")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 @app.get("/")
 def root():
+    stats = get_fingerprint_stats()
     return {
         "name": "TechStack Analyzer",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "fingerprints": stats["total_technologies"],
+        "categories": stats["total_categories"],
         "usage": "GET /scan?url=example.com",
         "github": "https://github.com/biuta666/techstack-analyzer",
     }
@@ -29,37 +32,30 @@ def root():
 
 @app.get("/scan")
 def scan_url(url: str):
-    """Scan a URL and return detected technologies."""
+    """Scan a URL using Wappalyzer's 7,245 fingerprint engine."""
     if not url:
         return {"error": "url parameter required"}
 
-    # Run all scanners
-    html_data = html_scan(url)
-    header_data = header_scan(url)
-    dns_data = dns_scan(url)
+    # Primary: Wappalyzer scan (7,245 fingerprints)
+    result = wappalyzer_scan(url)
 
-    if html_data.get("error") and header_data.get("error"):
-        return {"error": f"Cannot reach {url}: {html_data.get('error')}", "url": url}
+    # Fallback: custom HTML/DNS scan for metadata
+    if result.get("error"):
+        html_data = html_scan(url)
+        header_data = header_scan(url)
+        dns_data = dns_scan(url)
+        result.update({
+            "title": html_data.get("title", ""),
+            "status_code": html_data.get("status_code", 0),
+            "server": header_data.get("server"),
+            "ip": dns_data.get("ip"),
+        })
+    else:
+        html_data = html_scan(url)
+        result["title"] = html_data.get("title", "")
+        result["status_code"] = html_data.get("status_code", 0)
 
-    # Detect technologies
-    technologies = detect(
-        html=html_data.get("html", ""),
-        headers=header_data.get("headers", {}),
-        scripts=html_data.get("scripts", []),
-        dns_info=dns_data,
-    )
-
-    return {
-        "url": url,
-        "domain": url.split("://")[-1].split("/")[0],
-        "title": html_data.get("title", ""),
-        "status_code": html_data.get("status_code", 0),
-        "technologies": technologies,
-        "technologies_count": len(technologies),
-        "server": header_data.get("server"),
-        "powered_by": header_data.get("powered_by"),
-        "ip": dns_data.get("ip"),
-    }
+    return result
 
 
 @app.get("/report")
@@ -76,13 +72,20 @@ def get_report(url: str):
     return HTMLResponse(content=html_report, status_code=200)
 
 
+@app.get("/fingerprints")
+def fingerprint_stats():
+    """Get stats about the loaded fingerprint database."""
+    return get_fingerprint_stats()
+
+
 @app.get("/health")
 def health():
     return {
         "status": "ok",
         "service": "techstack-analyzer",
-        "version": "1.0.0",
-        "fingerprints_loaded": len(__import__("detector.fingerprint_engine", fromlist=[""]).load_fingerprints()),
+        "version": "2.0.0",
+        "fingerprints_loaded": len(load_fingerprints()),
+        "wappalyzer_db": 7245,
     }
 
 
